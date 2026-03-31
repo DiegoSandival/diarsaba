@@ -1,45 +1,34 @@
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
-use serde::Serialize;
 use std::time::Duration;
-
-#[derive(Serialize)]
-pub struct MutateRequest {
-    pub payload: Vec<u8>,
-    pub pubkey: [u8; 32],
-    pub signature: [u8; 64],
-}
 
 #[tokio::main]
 async fn main() {
-    println!("🧪 Iniciando Cliente de Prueba para Diarsaba...");
+    println!("🧪 Iniciando Cliente de Prueba (Bytes Crudos)...");
 
-    // 1. Generamos una identidad criptográfica real para el cliente
+    // 1. Identidad
     let mut csprng = OsRng;
     let client_keypair = SigningKey::generate(&mut csprng);
     let pubkey_bytes = client_keypair.verifying_key().to_bytes();
 
-    // 2. Creamos los datos que queremos guardar en Ouroboros (ej. un pequeño archivo)
-    let payload = b"Hola, Diarsaba. Este es mi primer registro en la base de datos descentralizada.".to_vec();
+    // 2. Datos y Firma
+    let payload = b"Hola, Diarsaba. Este es mi primer registro usando BYTES CRUDOS puros.".to_vec();
+    let signature = client_keypair.sign(&payload).to_bytes();
 
-    // 3. Firmamos los datos con nuestra llave privada
-    let signature = client_keypair.sign(&payload);
+    // 3. CONSTRUIR EL PAQUETE BINARIO [Pubkey(32) | Firma(64) | Payload(N)]
+    let mut paquete_binario = Vec::new();
+    paquete_binario.extend_from_slice(&pubkey_bytes);
+    paquete_binario.extend_from_slice(&signature);
+    paquete_binario.extend_from_slice(&payload);
 
-    // 4. Preparamos el paquete JSON
-    let request_data = MutateRequest {
-        payload,
-        pubkey: pubkey_bytes,
-        signature: signature.to_bytes(),
-    };
+    println!("🔐 Paquete binario construido ({} bytes). Enviando al Orquestador...", paquete_binario.len());
 
-    println!("🔐 Datos firmados correctamente. Enviando al Orquestador...");
-
-    // 5. Enviamos la petición HTTP POST al servidor local
+    // 4. Enviar mediante POST
     let client = reqwest::Client::new();
     let res = client
-        .post("http://127.0.0.1:80/do")
+        .post("http://127.0.0.1:8080/do") 
         .timeout(Duration::from_secs(3))
-        .json(&request_data)
+        .body(paquete_binario) // 👈 Aquí inyectamos los bytes crudos directamente
         .send()
         .await;
 
@@ -50,6 +39,6 @@ async fn main() {
             println!("\n📥 Respuesta del Servidor [{}]:", status);
             println!("{}", text);
         }
-        Err(e) => eprintln!("\n💥 Error conectando al servidor: ¿Está encendido? {}", e),
+        Err(e) => eprintln!("\n💥 Error conectando al servidor: {}", e),
     }
 }

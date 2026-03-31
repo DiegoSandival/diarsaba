@@ -90,7 +90,7 @@ async fn main() {
 
     // Actor B: Servidor HTTP (Axum)
     let router = api::build_router(app_state);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:80").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     
     tokio::spawn(async move {
         println!("🎧 Servidor web Axum escuchando en el puerto 80...");

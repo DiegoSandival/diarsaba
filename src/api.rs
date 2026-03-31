@@ -4,8 +4,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
-    Json,
+    body::Bytes,
 };
+
 use axum_extra::extract::Host;
 use tokio::sync::oneshot;
 
@@ -22,11 +23,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/sign", post(handle_sign))
         .route("/verify", post(handle_verify))
         // Ruta comodín para archivos del hosting descentralizado (ej. /css/style.css)
-        .route("/*file_path", get(handle_file_request))
+       .route("/{*file_path}", get(handle_file_request))
         .with_state(state)
 }
 
-#[derive(Deserialize)]
 pub struct MutateRequest {
     pub payload: Vec<u8>,
     pub pubkey: [u8; 32],
@@ -51,46 +51,42 @@ async fn handle_root(Host(hostname): Host) -> impl IntoResponse {
 async fn handle_do(
     Host(hostname): Host,
     State(state): State<AppState>,
-    Json(req): Json<MutateRequest>
-    // payload: Json<TuEstructuraRequest> -> Aquí extraes el body de la petición
+   body_bytes: Bytes,
 ) -> Response {
     // 1. FILTRO DE DOMINIO ESTRICTO
     if !is_api_domain(&hostname) {
         return (StatusCode::NOT_FOUND, "Endpoint exclusivo de la API").into_response();
     }
 
-    // 2. CREAR EL CANAL DE RESPUESTA
-    // oneshot permite que el Motor Genético nos responda a este handler específico.
-    let (reply_tx, reply_rx) = oneshot::channel();
+   // 2. DESEMPAQUETAR EL PROTOCOLO BINARIO
+    let mut pubkey = [0u8; 32];
+    pubkey.copy_from_slice(&body_bytes[0..32]);
 
-    // 3. EMPAQUETAR EL COMANDO
-    // (En la realidad, extraerías el opcode, payload y firma del body del request)
+    let mut signature = [0u8; 64];
+    signature.copy_from_slice(&body_bytes[32..96]);
+
+    // El resto es la carga útil
+    let payload = body_bytes[96..].to_vec();
+
+   // 3. ENVIAR AL MOTOR
+    let (reply_tx, reply_rx) = oneshot::channel();
     let cmd = EngineCommand::Mutate {
         opcode: Opcode::WriteCell, 
-        payload: vec![1, 2, 3], // Simulación del body
-        pubkey: [1u8; 32],
-        signature: [0u8; 64],   // Simulación de la firma
+        payload,
+        pubkey,
+        signature,
         reply_to: reply_tx,
     };
 
-    // 4. ENVIAR AL MOTOR GENÉTICO
-    if state.engine_tx.send(cmd).await.is_err() {
+  if state.engine_tx.send(cmd).await.is_err() {
         return (StatusCode::INTERNAL_SERVER_ERROR, "El Motor Genético está desconectado").into_response();
     }
 
-    // 5. ESPERAR RESULTADO SIN BLOQUEAR EL HILO
-    // Mientras esperamos, Tokio usa este hilo de CPU para atender a otros usuarios web.
+    // 4. ESPERAR RESPUESTA
     match reply_rx.await {
-        Ok(Ok(cell_id)) => {
-            (StatusCode::OK, format!("✅ Mutación exitosa. CellID generado.")).into_response()
-        }
-        Ok(Err(e)) => {
-            // El motor rechazó la operación (ej. firma inválida)
-            (StatusCode::BAD_REQUEST, format!("❌ Mutación rechazada: {}", e)).into_response()
-        }
-        Err(_) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, "El motor colapsó procesando la petición").into_response()
-        }
+        Ok(Ok(cell_id)) => (StatusCode::OK, format!("✅ Mutación exitosa. CellID: {:?}", &cell_id[0..4])).into_response(),
+        Ok(Err(e)) => (StatusCode::BAD_REQUEST, format!("❌ Rechazado: {}", e)).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "El motor colapsó").into_response(),
     }
 }
 
