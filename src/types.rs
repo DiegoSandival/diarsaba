@@ -34,19 +34,26 @@ pub struct AppState {
 #[derive(Debug)]
 pub enum EngineCommand {
     /// Petición para validar y escribir una célula en Ouroboros.
-    Mutate {
-        opcode: Opcode,
-        payload: Vec<u8>,
-        pubkey: [u8; 32],
-        signature: SignatureBytes,
-        /// Canal de un solo uso para devolver la respuesta asíncrona al solicitante (ej. handler de Axum).
-        reply_to: oneshot::Sender<Result<CellId, String>>,
+   Mutate {
+        ticket: Vec<u8>,
+        llave: [u8; 32],        // ej: "hola"
+        viejo_secreto: [u8; 32],
+        nuevo_secreto: [u8; 32],
+        payload: Vec<u8>,      // ej: "hola mundo"
+        reply_to: tokio::sync::oneshot::Sender<Result<u32, String>>, // Devolvemos el RecordIndex (u32)
     },
     
     /// Petición de lectura (ej. para servir un archivo en diarsaba.com).
     Query {
         id: CellId,
         reply_to: oneshot::Sender<Result<Vec<u8>, String>>,
+    },
+
+    Sign {
+        client_pubkey: [u8; 32],
+        client_signature: [u8; 64],
+        arbitrary_data: Vec<u8>,
+        reply_to: tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>,
     },
 }
 

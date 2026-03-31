@@ -73,7 +73,7 @@ async fn main() {
     // ==========================================
     let app_state = AppState {
         temp_db: Arc::clone(&temp_db_arc),
-        server_keypair,
+       server_keypair: Arc::clone(&server_keypair),
         engine_tx,
         p2p_tx,
     };
@@ -86,6 +86,7 @@ async fn main() {
         engine_rx,
         Arc::clone(&ouro_db_arc),
         Arc::clone(&temp_db_arc),
+        Arc::clone(&server_keypair),
     ));
 
     // Actor B: Servidor HTTP (Axum)
