@@ -1,0 +1,13 @@
+[package]
+name = "diarsaba"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+correspondence = []
+synap2p = []
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }
