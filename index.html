@@ -1,14 +1,201 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="es">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Diarsaba</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diarsaba</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f5f1e8;
+            --panel: rgba(255, 252, 246, 0.88);
+            --ink: #1f1d1a;
+            --muted: #6d675f;
+            --accent: #0f6b5d;
+            --accent-2: #d2a33a;
+            --line: rgba(31, 29, 26, 0.12);
+            --shadow: 0 24px 80px rgba(31, 29, 26, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Georgia, "Times New Roman", serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, rgba(210, 163, 58, 0.35), transparent 28%),
+                radial-gradient(circle at bottom right, rgba(15, 107, 93, 0.18), transparent 32%),
+                linear-gradient(180deg, #f8f4ec 0%, var(--bg) 100%);
+            display: grid;
+            place-items: center;
+            padding: 32px;
+        }
+
+        main {
+            width: min(920px, 100%);
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 28px;
+            box-shadow: var(--shadow);
+            overflow: hidden;
+            backdrop-filter: blur(12px);
+        }
+
+        .hero {
+            padding: 56px 56px 28px;
+            border-bottom: 1px solid var(--line);
+            background:
+                linear-gradient(135deg, rgba(15, 107, 93, 0.08), rgba(210, 163, 58, 0.14)),
+                linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0));
+        }
+
+        .eyebrow {
+            margin: 0 0 12px;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            font-size: 12px;
+            color: var(--accent);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: clamp(42px, 8vw, 76px);
+            line-height: 0.95;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            margin: 18px 0 0;
+            max-width: 680px;
+            font-size: 18px;
+            line-height: 1.65;
+            color: var(--muted);
+        }
+
+        .content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 0;
+        }
+
+        section {
+            padding: 28px 32px 34px;
+            border-right: 1px solid var(--line);
+            border-bottom: 1px solid var(--line);
+        }
+
+        section:nth-child(2n) {
+            border-right: none;
+        }
+
+        h2 {
+            margin: 0 0 14px;
+            font-size: 19px;
+        }
+
+        p, li {
+            font-size: 15px;
+            line-height: 1.65;
+            color: var(--muted);
+        }
+
+        ul {
+            margin: 0;
+            padding-left: 18px;
+        }
+
+        code {
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.95em;
+            color: var(--ink);
+            background: rgba(31, 29, 26, 0.06);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+
+        .footer {
+            padding: 24px 32px 34px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        @media (max-width: 720px) {
+            body {
+                padding: 16px;
+            }
+
+            .hero {
+                padding: 36px 24px 22px;
+            }
+
+            section,
+            .footer {
+                padding-left: 24px;
+                padding-right: 24px;
+            }
+
+            section {
+                border-right: none;
+            }
+        }
+    </style>
 </head>
 <body>
-  <main>
-    <h1>Diarsaba</h1>
-    <p>Punto Cero is available through the binary HTTP and WebSocket endpoints.</p>
-  </main>
+    <main>
+        <header class="hero">
+            <p class="eyebrow">Servidor binario sobre HTTP y WebSocket</p>
+            <h1>Diarsaba</h1>
+            <p class="subtitle">
+                Esta instancia expone un protocolo binario multiplexado por dominios para operaciones de
+                base de datos, mensajeria P2P y eventos push por WebSocket.
+            </p>
+        </header>
+
+        <div class="content">
+            <section>
+                <h2>Endpoints</h2>
+                <ul>
+                    <li><code>GET /</code> entrega esta pagina informativa.</li>
+                    <li><code>POST /do</code> procesa un frame binario completo y devuelve otro frame binario.</li>
+                    <li><code>GET /ws</code> abre una sesion WebSocket binaria con soporte de eventos push.</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>Dominios</h2>
+                <ul>
+                    <li><code>0x10</code> DB</li>
+                    <li><code>0x20</code> NET</li>
+                    <li><code>0x30</code> AUTH</li>
+                    <li><code>0x80</code> EVENT</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>Header</h2>
+                <p>
+                    Cada frame usa 8 bytes de cabecera: dominio, flags, <code>req_id</code> en little-endian y
+                    <code>payload_len</code> en big-endian.
+                </p>
+            </section>
+
+            <section>
+                <h2>Referencia</h2>
+                <p>
+                    La documentacion operativa y la especificacion del protocolo viven en el repositorio,
+                    principalmente en <code>README.md</code> y <code>docs/protocolo-binario.md</code>.
+                </p>
+            </section>
+        </div>
+
+        <div class="footer">
+            Si estas validando el proyecto desde Windows con el codigo alojado en WSL, ejecuta Cargo dentro de WSL
+            para evitar problemas del linker GNU sobre rutas UNC.
+        </div>
+    </main>
 </body>
 </html>

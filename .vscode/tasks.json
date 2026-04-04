@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "test: wsl",
+      "type": "shell",
+      "command": "wsl.exe",
+      "args": [
+        "--cd",
+        "/home/starnet/Code/diarsaba",
+        "--exec",
+        "/home/starnet/.cargo/bin/cargo",
+        "test"
+      ],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: full wsl",
+      "type": "shell",
+      "command": "wsl.exe",
+      "args": [
+        "--cd",
+        "/home/starnet/Code/diarsaba",
+        "--exec",
+        "/home/starnet/.cargo/bin/cargo",
+        "test",
+        "--features",
+        "correspondence,synap2p"
+      ],
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

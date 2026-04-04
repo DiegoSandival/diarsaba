@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-correspondence = []
-synap2p = []
+correspondence = ["dep:correspondence"]
+synap2p = ["dep:synap2p"]
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
+correspondence = { package = "Correspondence", git = "https://github.com/DiegoSandival/Correspondence", optional = true }
 futures-util = "0.3"
+synap2p = { git = "https://github.com/DiegoSandival/synap2p", branch = "onlyquic", optional = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }

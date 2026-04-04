@@ -10,7 +10,7 @@ use crate::protocol::{
 use core::str::FromStr;
 
 #[cfg(feature = "synap2p")]
-use synap2p::{NetworkEvent, NodeClient, PeerId};
+pub use synap2p::{NetworkEvent, NodeClient, PeerId};
 
 #[cfg(not(feature = "synap2p"))]
 pub type PeerId = String;
@@ -18,8 +18,8 @@ pub type PeerId = String;
 #[cfg(not(feature = "synap2p"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkEvent {
-    DirectMessageReceived { peer: PeerId, data: Vec<u8> },
-    GossipMessageReceived { topic: String, data: Vec<u8> },
+    DirectMessageReceived { source: PeerId, data: Vec<u8> },
+    GossipMessageReceived { source: PeerId, topic: String, data: Vec<u8> },
     ProviderFound { key: String, providers: Vec<PeerId> },
 }
 
@@ -73,7 +73,7 @@ pub trait NodeClientLike {
 
 #[cfg(feature = "synap2p")]
 impl NodeClientLike for NodeClient {
-    type Error = synap2p::Error;
+    type Error = synap2p::P2pError;
 
     async fn send_direct_message(&self, peer: PeerId, data: Vec<u8>) -> Result<(), Self::Error> {
         self.send_direct_message(peer, data).await
@@ -171,14 +171,14 @@ where
 
 pub fn pack_network_event(event: NetworkEvent) -> Vec<Vec<u8>> {
     match event {
-        NetworkEvent::DirectMessageReceived { peer, data } => {
-            let peer_bytes = peer_id_to_bytes(&peer);
+        NetworkEvent::DirectMessageReceived { source, data } => {
+            let peer_bytes = peer_id_to_bytes(&source);
             match build_event_payload_with_tail(EVT_DIRECT_MSG, &peer_bytes, &data) {
                 Some(frame) => vec![frame],
                 None => Vec::new(),
             }
         }
-        NetworkEvent::GossipMessageReceived { topic, data } => {
+        NetworkEvent::GossipMessageReceived { topic, data, .. } => {
             match build_event_payload_with_tail(EVT_GOSSIP_MSG, topic.as_bytes(), &data) {
                 Some(frame) => vec![frame],
                 None => Vec::new(),
@@ -192,6 +192,8 @@ pub fn pack_network_event(event: NetworkEvent) -> Vec<Vec<u8>> {
                 build_provider_found_frame(key_bytes, &peer_bytes)
             })
             .collect(),
+            #[cfg(feature = "synap2p")]
+            _ => Vec::new(),
     }
 }
 
@@ -332,6 +334,16 @@ mod tests {
     use super::*;
     use crate::protocol::parse_header;
 
+    #[cfg(feature = "synap2p")]
+    fn test_peer_id() -> PeerId {
+        PeerId::random()
+    }
+
+    #[cfg(not(feature = "synap2p"))]
+    fn test_peer_id() -> PeerId {
+        String::from("peer-1")
+    }
+
     #[derive(Default)]
     struct MockClient {
         direct_calls: Mutex<Vec<(PeerId, Vec<u8>)>>,
@@ -374,24 +386,41 @@ mod tests {
             payload_len: 0,
         };
         let client = MockClient::default();
-        let payload = [NET_DIRECT_MSG, 6, b'p', b'e', b'e', b'r', b'-', b'1', 1, 2, 3];
+        let peer = test_peer_id();
+        let peer_text = peer.to_string();
+        let peer_bytes = peer_text.as_bytes();
+        let mut payload = Vec::with_capacity(2 + peer_bytes.len() + 3);
+        payload.push(NET_DIRECT_MSG);
+        payload.push(u8::try_from(peer_bytes.len()).expect("peer id should fit in test payload"));
+        payload.extend_from_slice(peer_bytes);
+        payload.extend_from_slice(&[1, 2, 3]);
 
         let frame = block_on(handle_net_request(&header, &payload, &client));
         let response_header = parse_header(&frame[..8]).expect("header should parse");
+        let direct_calls = client.direct_calls.lock().expect("lock poisoned");
 
         assert_eq!(response_header.domain, DOMAIN_NET);
         assert_eq!(response_header.flags, 0);
         assert_eq!(response_header.req_id, 77);
         assert_eq!(response_header.payload_len, 0);
         assert_eq!(frame.len(), 8);
-        assert_eq!(
-            client.direct_calls.lock().expect("lock poisoned").as_slice(),
-            &[(String::from("peer-1"), vec![1, 2, 3])]
-        );
+        assert_eq!(direct_calls.len(), 1);
+        assert_eq!(direct_calls[0].0.to_string(), peer_text);
+        assert_eq!(direct_calls[0].1, vec![1, 2, 3]);
     }
 
     #[test]
     fn handle_find_request_encodes_provider_list() {
+        let peer_a = test_peer_id();
+        let peer_b = test_peer_id();
+        let peer_a_bytes = peer_a.to_string().into_bytes();
+        let peer_b_bytes = peer_b.to_string().into_bytes();
+        let mut expected_payload = Vec::new();
+        expected_payload.push(u8::try_from(peer_a_bytes.len()).expect("peer id should fit in test payload"));
+        expected_payload.extend_from_slice(&peer_a_bytes);
+        expected_payload.push(u8::try_from(peer_b_bytes.len()).expect("peer id should fit in test payload"));
+        expected_payload.extend_from_slice(&peer_b_bytes);
+
         let header = DiarsabaHeader {
             domain: DOMAIN_NET,
             flags: 0,
@@ -399,7 +428,7 @@ mod tests {
             payload_len: 0,
         };
         let client = MockClient {
-            find_response: Mutex::new(vec![String::from("peer-a"), String::from("peer-b")]),
+            find_response: Mutex::new(vec![peer_a, peer_b]),
             ..MockClient::default()
         };
         let payload = [NET_FIND, 3, b'k', b'e', b'y'];
@@ -409,10 +438,7 @@ mod tests {
 
         assert_eq!(response_header.flags, 0);
         assert_eq!(response_header.req_id, 9);
-        assert_eq!(
-            &frame[8..],
-            &[6, b'p', b'e', b'e', b'r', b'-', b'a', 6, b'p', b'e', b'e', b'r', b'-', b'b']
-        );
+        assert_eq!(&frame[8..], expected_payload.as_slice());
         assert_eq!(
             client.find_calls.lock().expect("lock poisoned").as_slice(),
             &[String::from("key")]
@@ -443,9 +469,13 @@ mod tests {
 
     #[test]
     fn pack_provider_found_emits_one_frame_per_peer() {
+        let peer_1 = test_peer_id();
+        let peer_2 = test_peer_id();
+        let peer_1_bytes = peer_1.to_string().into_bytes();
+        let peer_2_bytes = peer_2.to_string().into_bytes();
         let frames = pack_network_event(NetworkEvent::ProviderFound {
             key: String::from("cell"),
-            providers: vec![String::from("peer-1"), String::from("peer-2")],
+            providers: vec![peer_1, peer_2],
         });
 
         assert_eq!(frames.len(), 2);
@@ -454,14 +484,14 @@ mod tests {
         assert_eq!(first_header.domain, DOMAIN_EVENT);
         assert_eq!(first_header.flags, 0);
         assert_eq!(first_header.req_id, 0);
-        assert_eq!(
-            &frames[0][8..],
-            &[EVT_PROVIDER_FOUND, 4, b'c', b'e', b'l', b'l', 6, b'p', b'e', b'e', b'r', b'-', b'1']
-        );
-        assert_eq!(
-            &frames[1][8..],
-            &[EVT_PROVIDER_FOUND, 4, b'c', b'e', b'l', b'l', 6, b'p', b'e', b'e', b'r', b'-', b'2']
-        );
+        let mut expected_first = vec![EVT_PROVIDER_FOUND, 4, b'c', b'e', b'l', b'l'];
+        expected_first.push(u8::try_from(peer_1_bytes.len()).expect("peer id should fit in test payload"));
+        expected_first.extend_from_slice(&peer_1_bytes);
+        let mut expected_second = vec![EVT_PROVIDER_FOUND, 4, b'c', b'e', b'l', b'l'];
+        expected_second.push(u8::try_from(peer_2_bytes.len()).expect("peer id should fit in test payload"));
+        expected_second.extend_from_slice(&peer_2_bytes);
+        assert_eq!(&frames[0][8..], expected_first.as_slice());
+        assert_eq!(&frames[1][8..], expected_second.as_slice());
     }
 
     fn block_on<F>(future: F) -> F::Output

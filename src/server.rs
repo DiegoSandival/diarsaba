@@ -20,12 +20,6 @@ use crate::protocol::{
     HEADER_LEN,
 };
 
-#[cfg(feature = "correspondence")]
-use correspondence::CellEngine;
-
-#[cfg(feature = "synap2p")]
-use synap2p::NodeClient;
-
 const INDEX_HTML: &str = include_str!("../index.html");
 
 #[derive(Clone)]
@@ -56,12 +50,6 @@ where
     axum::serve(listener, build_app(state)).await
 }
 
-#[cfg(all(feature = "correspondence", feature = "synap2p"))]
-pub async fn route_diarsaba_frame(frame: &[u8], db: &CellEngine, net: &NodeClient) -> Vec<u8> {
-    route_diarsaba_frame_inner(frame, db, net).await
-}
-
-#[cfg(not(all(feature = "correspondence", feature = "synap2p")))]
 pub async fn route_diarsaba_frame<D, N>(frame: &[u8], db: &D, net: &N) -> Vec<u8>
 where
     D: CellEngineLike,
@@ -243,6 +231,16 @@ mod tests {
     use crate::net_handler::PeerId;
     use crate::protocol::{parse_header, DOMAIN_EVENT, DOMAIN_NET, NET_FIND};
 
+    #[cfg(feature = "synap2p")]
+    fn test_peer_id() -> PeerId {
+        PeerId::random()
+    }
+
+    #[cfg(not(feature = "synap2p"))]
+    fn test_peer_id() -> PeerId {
+        String::from("peer-1")
+    }
+
     struct MockDb;
 
     impl CellEngineLike for MockDb {
@@ -259,7 +257,10 @@ mod tests {
         }
     }
 
-    struct MockNet;
+    #[derive(Default)]
+    struct MockNet {
+        providers: Vec<PeerId>,
+    }
 
     impl NodeClientLike for MockNet {
         type Error = &'static str;
@@ -277,12 +278,13 @@ mod tests {
         }
 
         async fn find_providers(&self, _key: String) -> Result<Vec<PeerId>, Self::Error> {
-            Ok(vec![String::from("peer-1")])
+            Ok(self.providers.clone())
         }
     }
 
     #[test]
     fn route_returns_auth_mock_payload() {
+        let net = MockNet::default();
         let frame = build_frame(
             DiarsabaHeader {
                 domain: DOMAIN_AUTH,
@@ -293,7 +295,7 @@ mod tests {
             Vec::new(),
         );
 
-        let response = block_on(route_diarsaba_frame(&frame, &MockDb, &MockNet));
+        let response = block_on(route_diarsaba_frame(&frame, &MockDb, &net));
         let header = parse_header(&response[..HEADER_LEN]).expect("header should parse");
 
         assert_eq!(header.domain, DOMAIN_AUTH);
@@ -304,7 +306,8 @@ mod tests {
 
     #[test]
     fn route_returns_error_for_short_frame() {
-        let response = block_on(route_diarsaba_frame(&[1, 2, 3], &MockDb, &MockNet));
+        let net = MockNet::default();
+        let response = block_on(route_diarsaba_frame(&[1, 2, 3], &MockDb, &net));
         let header = parse_header(&response[..HEADER_LEN]).expect("header should parse");
 
         assert_eq!(header.flags, FLAG_ERROR);
@@ -313,6 +316,11 @@ mod tests {
 
     #[test]
     fn route_dispatches_net_requests() {
+        let expected_peer = test_peer_id();
+        let expected_peer_bytes = expected_peer.to_string().into_bytes();
+        let mut expected_payload = Vec::new();
+        expected_payload.push(u8::try_from(expected_peer_bytes.len()).expect("peer id should fit in test payload"));
+        expected_payload.extend_from_slice(&expected_peer_bytes);
         let payload = vec![NET_FIND, 3, b'k', b'e', b'y'];
         let frame = build_frame(
             DiarsabaHeader {
@@ -323,23 +331,27 @@ mod tests {
             },
             payload,
         );
+        let net = MockNet {
+            providers: vec![expected_peer],
+        };
 
-        let response = block_on(route_diarsaba_frame(&frame, &MockDb, &MockNet));
+        let response = block_on(route_diarsaba_frame(&frame, &MockDb, &net));
         let header = parse_header(&response[..HEADER_LEN]).expect("header should parse");
 
         assert_eq!(header.domain, DOMAIN_NET);
         assert_eq!(header.req_id, 33);
-        assert_eq!(&response[HEADER_LEN..], &[6, b'p', b'e', b'e', b'r', b'-', b'1']);
+        assert_eq!(&response[HEADER_LEN..], expected_payload.as_slice());
     }
 
     #[test]
     fn forward_network_events_broadcasts_frames() {
+        let provider = test_peer_id();
         let (event_tx, mut event_rx) = broadcast::channel(4);
         let (network_tx, network_rx) = mpsc::channel(4);
 
         network_tx.try_send(NetworkEvent::ProviderFound {
             key: String::from("cell"),
-            providers: vec![String::from("peer-a")],
+            providers: vec![provider.clone()],
         }).expect("send should work");
         drop(network_tx);
 
@@ -347,9 +359,14 @@ mod tests {
 
         let frame = event_rx.try_recv().expect("broadcast frame expected");
         let header = parse_header(&frame[..HEADER_LEN]).expect("header should parse");
+        let provider_bytes = provider.to_string().into_bytes();
+        let mut expected_payload = vec![3, 4, b'c', b'e', b'l', b'l'];
+        expected_payload.push(u8::try_from(provider_bytes.len()).expect("peer id should fit in test payload"));
+        expected_payload.extend_from_slice(&provider_bytes);
 
         assert_eq!(header.domain, DOMAIN_EVENT);
         assert_eq!(header.req_id, 0);
+        assert_eq!(&frame[HEADER_LEN..], expected_payload.as_slice());
     }
 
     fn block_on<F>(future: F) -> F::Output
