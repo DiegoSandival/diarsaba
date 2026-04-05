@@ -3,7 +3,7 @@ use std::sync::Arc;
 #[cfg(not(all(feature = "correspondence", feature = "synap2p")))]
 use diarsaba::db_handler::CellEngineLike;
 #[cfg(not(all(feature = "correspondence", feature = "synap2p")))]
-use diarsaba::net_handler::{NodeClientLike, PeerId};
+use diarsaba::net_handler::{Multiaddr, NodeClientLike, PeerId};
 use diarsaba::server::{serve, AppState};
 use tokio::sync::broadcast;
 
@@ -46,6 +46,14 @@ struct NoopNet;
 #[cfg(not(all(feature = "correspondence", feature = "synap2p")))]
 impl NodeClientLike for NoopNet {
     type Error = &'static str;
+
+    async fn connect_to_node(&self, _peer: PeerId, _addr: Multiaddr) -> Result<(), Self::Error> {
+        Err("synap2p client not configured")
+    }
+
+    async fn subscribe(&self, _topic: String) -> Result<(), Self::Error> {
+        Err("synap2p client not configured")
+    }
 
     async fn send_direct_message(&self, _peer: PeerId, _data: Vec<u8>) -> Result<(), Self::Error> {
         Err("synap2p client not configured")

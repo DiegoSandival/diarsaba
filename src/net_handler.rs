@@ -3,17 +3,21 @@ use core::future::Future;
 
 use crate::protocol::{
     build_header, DiarsabaHeader, DOMAIN_EVENT, DOMAIN_NET, EVT_DIRECT_MSG, EVT_GOSSIP_MSG,
-    EVT_PROVIDER_FOUND, FLAG_ERROR, NET_ANNOUNCE, NET_DIRECT_MSG, NET_FIND, NET_PUBLISH,
+    EVT_PROVIDER_FOUND, FLAG_ERROR, NET_ANNOUNCE, NET_CONNECT, NET_DIRECT_MSG, NET_FIND,
+    NET_PUBLISH, NET_SUBSCRIBE,
 };
 
 #[cfg(feature = "synap2p")]
 use core::str::FromStr;
 
 #[cfg(feature = "synap2p")]
-pub use synap2p::{NetworkEvent, NodeClient, PeerId};
+pub use synap2p::{Multiaddr, NetworkEvent, NodeClient, PeerId};
 
 #[cfg(not(feature = "synap2p"))]
 pub type PeerId = String;
+
+#[cfg(not(feature = "synap2p"))]
+pub type Multiaddr = String;
 
 #[cfg(not(feature = "synap2p"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +30,14 @@ pub enum NetworkEvent {
 #[cfg(not(feature = "synap2p"))]
 pub trait NodeClientLike {
     type Error: Display;
+
+    fn connect_to_node(
+        &self,
+        peer: PeerId,
+        addr: Multiaddr,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn subscribe(&self, topic: String) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     fn send_direct_message(
         &self,
@@ -50,6 +62,14 @@ pub trait NodeClientLike {
 #[cfg(feature = "synap2p")]
 pub trait NodeClientLike {
     type Error: Display;
+
+    fn connect_to_node(
+        &self,
+        peer: PeerId,
+        addr: Multiaddr,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    fn subscribe(&self, topic: String) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
     fn send_direct_message(
         &self,
@@ -74,6 +94,14 @@ pub trait NodeClientLike {
 #[cfg(feature = "synap2p")]
 impl NodeClientLike for NodeClient {
     type Error = synap2p::P2pError;
+
+    async fn connect_to_node(&self, peer: PeerId, addr: Multiaddr) -> Result<(), Self::Error> {
+        self.connect_to_node(peer, addr).await
+    }
+
+    async fn subscribe(&self, topic: String) -> Result<(), Self::Error> {
+        self.subscribe(topic).await
+    }
 
     async fn send_direct_message(&self, peer: PeerId, data: Vec<u8>) -> Result<(), Self::Error> {
         self.send_direct_message(peer, data).await
@@ -105,6 +133,33 @@ where
     };
 
     match opcode {
+        NET_CONNECT => {
+            let (peer_bytes, trailing) = match split_len_prefixed(rest) {
+                Ok(parts) => parts,
+                Err(error) => return build_error_response(header.req_id, error),
+            };
+            let peer = match parse_peer_id(peer_bytes) {
+                Ok(peer) => peer,
+                Err(error) => return build_error_response(header.req_id, &error),
+            };
+
+            let (addr_bytes, trailing) = match split_len_prefixed(trailing) {
+                Ok(parts) => parts,
+                Err(error) => return build_error_response(header.req_id, error),
+            };
+            if !trailing.is_empty() {
+                return build_error_response(header.req_id, "unexpected trailing bytes in connect request");
+            }
+            let addr = match parse_multiaddr(addr_bytes) {
+                Ok(addr) => addr,
+                Err(error) => return build_error_response(header.req_id, &error),
+            };
+
+            match client.connect_to_node(peer, addr).await {
+                Ok(()) => build_success_response(header.req_id, Vec::new()),
+                Err(error) => build_error_response(header.req_id, &error.to_string()),
+            }
+        }
         NET_DIRECT_MSG => {
             let (peer_bytes, data) = match split_len_prefixed(rest) {
                 Ok(parts) => parts,
@@ -128,6 +183,21 @@ where
             let topic = String::from_utf8_lossy(topic_bytes).into_owned();
 
             match client.publish_message(topic, data.to_vec()).await {
+                Ok(()) => build_success_response(header.req_id, Vec::new()),
+                Err(error) => build_error_response(header.req_id, &error.to_string()),
+            }
+        }
+        NET_SUBSCRIBE => {
+            let (topic_bytes, trailing) = match split_len_prefixed(rest) {
+                Ok(parts) => parts,
+                Err(error) => return build_error_response(header.req_id, error),
+            };
+            if !trailing.is_empty() {
+                return build_error_response(header.req_id, "unexpected trailing bytes in subscribe request");
+            }
+            let topic = String::from_utf8_lossy(topic_bytes).into_owned();
+
+            match client.subscribe(topic).await {
                 Ok(()) => build_success_response(header.req_id, Vec::new()),
                 Err(error) => build_error_response(header.req_id, &error.to_string()),
             }
@@ -221,6 +291,17 @@ fn parse_peer_id(data: &[u8]) -> Result<PeerId, String> {
 
 #[cfg(not(feature = "synap2p"))]
 fn parse_peer_id(data: &[u8]) -> Result<PeerId, String> {
+    Ok(String::from_utf8_lossy(data).into_owned())
+}
+
+#[cfg(feature = "synap2p")]
+fn parse_multiaddr(data: &[u8]) -> Result<Multiaddr, String> {
+    let addr = String::from_utf8_lossy(data);
+    Multiaddr::from_str(addr.as_ref()).map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "synap2p"))]
+fn parse_multiaddr(data: &[u8]) -> Result<Multiaddr, String> {
     Ok(String::from_utf8_lossy(data).into_owned())
 }
 
@@ -346,6 +427,8 @@ mod tests {
 
     #[derive(Default)]
     struct MockClient {
+        connect_calls: Mutex<Vec<(PeerId, Multiaddr)>>,
+        subscribe_calls: Mutex<Vec<String>>,
         direct_calls: Mutex<Vec<(PeerId, Vec<u8>)>>,
         publish_calls: Mutex<Vec<(String, Vec<u8>)>>,
         announce_calls: Mutex<Vec<String>>,
@@ -355,6 +438,16 @@ mod tests {
 
     impl NodeClientLike for MockClient {
         type Error = String;
+
+        async fn connect_to_node(&self, peer: PeerId, addr: Multiaddr) -> Result<(), Self::Error> {
+            self.connect_calls.lock().expect("lock poisoned").push((peer, addr));
+            Ok(())
+        }
+
+        async fn subscribe(&self, topic: String) -> Result<(), Self::Error> {
+            self.subscribe_calls.lock().expect("lock poisoned").push(topic);
+            Ok(())
+        }
 
         async fn send_direct_message(&self, peer: PeerId, data: Vec<u8>) -> Result<(), Self::Error> {
             self.direct_calls.lock().expect("lock poisoned").push((peer, data));
@@ -407,6 +500,85 @@ mod tests {
         assert_eq!(direct_calls.len(), 1);
         assert_eq!(direct_calls[0].0.to_string(), peer_text);
         assert_eq!(direct_calls[0].1, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn handle_connect_request_parses_peer_and_addr() {
+        let header = DiarsabaHeader {
+            domain: DOMAIN_NET,
+            flags: 0,
+            req_id: 40,
+            payload_len: 0,
+        };
+        let client = MockClient::default();
+        let peer = test_peer_id();
+        let peer_text = peer.to_string();
+        let peer_bytes = peer_text.as_bytes();
+        let addr_text = "/ip4/127.0.0.1/udp/9000/quic-v1";
+        let addr_bytes = addr_text.as_bytes();
+        let mut payload = Vec::new();
+        payload.push(NET_CONNECT);
+        payload.push(u8::try_from(peer_bytes.len()).expect("peer id should fit in test payload"));
+        payload.extend_from_slice(peer_bytes);
+        payload.push(u8::try_from(addr_bytes.len()).expect("multiaddr should fit in test payload"));
+        payload.extend_from_slice(addr_bytes);
+
+        let frame = block_on(handle_net_request(&header, &payload, &client));
+        let response_header = parse_header(&frame[..8]).expect("header should parse");
+        let connect_calls = client.connect_calls.lock().expect("lock poisoned");
+
+        assert_eq!(response_header.domain, DOMAIN_NET);
+        assert_eq!(response_header.flags, 0);
+        assert_eq!(response_header.req_id, 40);
+        assert_eq!(response_header.payload_len, 0);
+        assert_eq!(frame.len(), 8);
+        assert_eq!(connect_calls.len(), 1);
+        assert_eq!(connect_calls[0].0.to_string(), peer_text);
+        assert_eq!(connect_calls[0].1.to_string(), addr_text);
+    }
+
+    #[test]
+    fn handle_subscribe_request_rejects_trailing_bytes() {
+        let header = DiarsabaHeader {
+            domain: DOMAIN_NET,
+            flags: 0,
+            req_id: 19,
+            payload_len: 0,
+        };
+        let client = MockClient::default();
+        let payload = [NET_SUBSCRIBE, 5, b't', b'o', b'p', b'i', b'c', 0xff];
+
+        let frame = block_on(handle_net_request(&header, &payload, &client));
+        let response_header = parse_header(&frame[..8]).expect("header should parse");
+
+        assert_eq!(response_header.flags, FLAG_ERROR);
+        assert_eq!(response_header.req_id, 19);
+        assert_eq!(
+            std::str::from_utf8(&frame[8..]).expect("valid utf8 error"),
+            "unexpected trailing bytes in subscribe request"
+        );
+    }
+
+    #[test]
+    fn handle_subscribe_request_calls_client() {
+        let header = DiarsabaHeader {
+            domain: DOMAIN_NET,
+            flags: 0,
+            req_id: 20,
+            payload_len: 0,
+        };
+        let client = MockClient::default();
+        let payload = [NET_SUBSCRIBE, 5, b't', b'o', b'p', b'i', b'c'];
+
+        let frame = block_on(handle_net_request(&header, &payload, &client));
+        let response_header = parse_header(&frame[..8]).expect("header should parse");
+
+        assert_eq!(response_header.flags, 0);
+        assert_eq!(response_header.req_id, 20);
+        assert_eq!(
+            client.subscribe_calls.lock().expect("lock poisoned").as_slice(),
+            &[String::from("topic")]
+        );
     }
 
     #[test]

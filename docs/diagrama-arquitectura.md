@@ -146,12 +146,12 @@ mindmap
       DB_MERGE 0x05
       DB_INSPECT 0x06
     NET 0x20
+            NET_CONNECT 0x21 ✅
       NET_DIRECT_MSG 0x22 ✅
+            NET_SUBSCRIBE 0x23 ✅
       NET_PUBLISH 0x24 ✅
       NET_ANNOUNCE 0x25 ✅
       NET_FIND 0x26 ✅
-      NET_CONNECT 0x21 ⬜
-      NET_SUBSCRIBE 0x23 ⬜
     AUTH 0x30
       AUTH_GEN_KEYPAIR 0x31 ⬜
       AUTH_SIGN 0x32 ⬜
