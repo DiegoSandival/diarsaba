@@ -1,0 +1,68 @@
+graph TD
+    subgraph Clientes
+        C1[Cliente HTTP]
+        C2[Cliente WebSocket]
+    end
+
+    subgraph Servidor["servidor (server.rs)"]
+        R_INDEX["GET / → index_handler"]
+        R_DO["POST /do → http_frame_handler"]
+        R_WS["GET /ws → ws_upgrade_handler"]
+        ROUTER[route_diarsaba_frame]
+        FWD[forward_network_events]
+        BCAST["broadcast::Sender&lt;Vec&lt;u8&gt;&gt;"]
+    end
+
+    subgraph Protocolo["protocolo (protocol.rs)"]
+        PARSE[parse_header]
+        BUILD[build_header]
+        HDR["DiarsabaHeader\n domain | flags | req_id | payload_len"]
+    end
+
+    subgraph Dominios["despachador de dominio"]
+        DOM_DB["DOMAIN_DB 0x10"]
+        DOM_NET["DOMAIN_NET 0x20"]
+        DOM_AUTH["DOMAIN_AUTH 0x30\n(stub)"]
+        DOM_EVT["DOMAIN_EVENT 0x80\n(solo push)"]
+    end
+
+    subgraph DB["db_handler.rs"]
+        CEL["trait CellEngineLike\n→ ejecutar()"]
+        CEL_REAL["CellEngine\n(feature: correspondence)"]
+        CEL_NOOP["NoopDb\n(sin feature)"]
+    end
+
+    subgraph NET["net_handler.rs"]
+        NCL["trait NodeClientLike\n→ send_direct_message()\n→ publish_message()\n→ announce_provider()\n→ find_providers()"]
+        NCL_REAL["NodeClient\n(feature: synap2p)"]
+        NCL_NOOP["NoopNet\n(sin feature)"]
+        PKG[pack_network_event]
+    end
+
+    subgraph Estado["AppState (Arc)"]
+        STATE["db: Arc&lt;D: CellEngineLike&gt;\nnet: Arc&lt;N: NodeClientLike&gt;\nevent_tx: broadcast::Sender"]
+    end
+
+    C1 -->|"frame binario"| R_DO
+    C2 -->|"upgrade"| R_WS
+    R_DO --> ROUTER
+    R_WS --> ROUTER
+    ROUTER --> PARSE
+    PARSE --> HDR
+    ROUTER --> DOM_DB
+    ROUTER --> DOM_NET
+    ROUTER --> DOM_AUTH
+    DOM_DB --> CEL
+    DOM_NET --> NCL
+    CEL --> CEL_REAL
+    CEL --> CEL_NOOP
+    NCL --> NCL_REAL
+    NCL --> NCL_NOOP
+    NCL_REAL -->|"NetworkEvent"| PKG
+    PKG --> FWD
+    FWD --> BCAST
+    BCAST -->|"push frame"| C2
+    ROUTER -->|"respuesta binaria"| BUILD
+    BUILD --> HDR
+    Estado --> R_DO
+    Estado --> R_WS

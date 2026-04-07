@@ -220,17 +220,12 @@ El dominio NET implementa una gramática propia de payloads y sí distingue opco
 
 | Opcode | Constante | Estado |
 | --- | --- | --- |
+| `0x21` | `NET_CONNECT` | implementado |
 | `0x22` | `NET_DIRECT_MSG` | implementado |
+| `0x23` | `NET_SUBSCRIBE` | implementado |
 | `0x24` | `NET_PUBLISH` | implementado |
 | `0x25` | `NET_ANNOUNCE` | implementado |
 | `0x26` | `NET_FIND` | implementado |
-
-### Operaciones declaradas pero no implementadas
-
-| Opcode | Constante | Comportamiento actual |
-| --- | --- | --- |
-| `0x21` | `NET_CONNECT` | devuelve `unsupported net opcode` |
-| `0x23` | `NET_SUBSCRIBE` | devuelve `unsupported net opcode` |
 
 ### Convención de campo length-prefixed
 
@@ -258,6 +253,22 @@ Respuesta:
 - éxito con payload vacío;
 - error con mensaje textual.
 
+#### `NET_CONNECT`
+
+Payload:
+
+- `opcode = 0x21`
+- `peer_len`
+- `peer_bytes`
+- `addr_len`
+- `addr_bytes`
+
+No admite bytes sobrantes después de `addr_bytes`.
+
+Acción:
+
+- llama a `connect_to_node(peer, addr)`.
+
 #### `NET_PUBLISH`
 
 Payload:
@@ -270,6 +281,20 @@ Payload:
 Acción:
 
 - llama a `publish_message(topic, data)`.
+
+#### `NET_SUBSCRIBE`
+
+Payload:
+
+- `opcode = 0x23`
+- `topic_len`
+- `topic_bytes`
+
+No admite bytes sobrantes después de `topic_bytes`.
+
+Acción:
+
+- llama a `subscribe(topic)`.
 
 #### `NET_ANNOUNCE`
 
@@ -390,7 +415,6 @@ La validez de esta segunda variante depende de que las dependencias Git externas
 ## Limitaciones actuales
 
 - `AUTH` está reservado pero no implementado.
-- `NET_CONNECT` y `NET_SUBSCRIBE` están declarados pero no soportados.
 - El binario en modo parcial no habilita solo una mitad funcional; si falta uno de los dos features principales, ambos backends quedan en stub.
 - No hay documentación embebida tipo Rustdoc en los módulos principales.
 
@@ -399,5 +423,4 @@ La validez de esta segunda variante depende de que las dependencias Git externas
 - Añadir una especificación formal versionada del protocolo para clientes externos.
 - Definir semántica pública estable para los opcodes DB, hoy delegados por completo al backend.
 - Implementar autenticación o eliminar temporalmente el dominio `AUTH` de la superficie pública si aún no se usará.
-- Decidir si `NET_CONNECT` y `NET_SUBSCRIBE` seguirán existiendo; si sí, implementar su flujo y documentarlo.
 - Incorporar un ejemplo de cliente CLI o script de prueba que construya frames binarios reales.

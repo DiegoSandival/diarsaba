@@ -228,7 +228,7 @@ mod tests {
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
     use super::*;
-    use crate::net_handler::PeerId;
+    use crate::net_handler::{Multiaddr, PeerId};
     use crate::protocol::{parse_header, DOMAIN_EVENT, DOMAIN_NET, NET_FIND};
 
     #[cfg(feature = "synap2p")]
@@ -264,6 +264,14 @@ mod tests {
 
     impl NodeClientLike for MockNet {
         type Error = &'static str;
+
+        async fn connect_to_node(&self, _peer: PeerId, _addr: Multiaddr) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        async fn subscribe(&self, _topic: String) -> Result<(), Self::Error> {
+            Ok(())
+        }
 
         async fn send_direct_message(&self, _peer: PeerId, _data: Vec<u8>) -> Result<(), Self::Error> {
             Ok(())

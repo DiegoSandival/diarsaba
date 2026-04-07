@@ -167,9 +167,9 @@ El dominio NET sí interpreta opcodes en el servidor.
 
 | Constante | Valor | Estado |
 | --- | --- | --- |
-| `NET_CONNECT` | `0x21` | declarado, no implementado |
+| `NET_CONNECT` | `0x21` | implementado |
 | `NET_DIRECT_MSG` | `0x22` | implementado |
-| `NET_SUBSCRIBE` | `0x23` | declarado, no implementado |
+| `NET_SUBSCRIBE` | `0x23` | implementado |
 | `NET_PUBLISH` | `0x24` | implementado |
 | `NET_ANNOUNCE` | `0x25` | implementado |
 | `NET_FIND` | `0x26` | implementado |
@@ -186,7 +186,27 @@ Varias operaciones usan un campo con esta forma:
 
 `field_len` ocupa un byte, así que el tamaño máximo del campo principal es 255 bytes.
 
-### 6.3 `NET_DIRECT_MSG` (`0x22`)
+### 6.3 `NET_CONNECT` (`0x21`)
+
+Payload:
+
+```text
++--------+----------+----------------------+----------+----------------------+ 
+| opcode | peer_len | peer_bytes[peer_len] | addr_len | addr_bytes[addr_len] |
++--------+----------+----------------------+----------+----------------------+ 
+```
+
+Semántica:
+
+- `peer_bytes` se convierten a `PeerId`.
+- `addr_bytes` se convierten a `Multiaddr`.
+- no debe haber trailing bytes después de `addr_bytes`.
+
+Respuesta exitosa:
+
+- payload vacío.
+
+### 6.4 `NET_DIRECT_MSG` (`0x22`)
 
 Payload:
 
@@ -206,7 +226,26 @@ Respuesta exitosa:
 
 - payload vacío.
 
-### 6.4 `NET_PUBLISH` (`0x24`)
+### 6.5 `NET_SUBSCRIBE` (`0x23`)
+
+Payload:
+
+```text
++--------+-----------+------------------------+
+| opcode | topic_len | topic_bytes[topic_len] |
++--------+-----------+------------------------+
+```
+
+Restricción:
+
+- no debe haber trailing bytes después del topic;
+- si existen, el servidor devuelve `unexpected trailing bytes in subscribe request`.
+
+Respuesta exitosa:
+
+- payload vacío.
+
+### 6.6 `NET_PUBLISH` (`0x24`)
 
 Payload:
 
@@ -218,7 +257,7 @@ Payload:
 
 `topic_bytes` se interpretan con `String::from_utf8_lossy`.
 
-### 6.5 `NET_ANNOUNCE` (`0x25`)
+### 6.7 `NET_ANNOUNCE` (`0x25`)
 
 Payload:
 
@@ -233,7 +272,7 @@ Restricción:
 - no debe haber trailing bytes después de la clave;
 - si existen, el servidor devuelve `unexpected trailing bytes in announce request`.
 
-### 6.6 `NET_FIND` (`0x26`)
+### 6.8 `NET_FIND` (`0x26`)
 
 Payload:
 
@@ -380,7 +419,7 @@ Contrato:
 | `payload_len` mayor al tamaño real del body | `frame payload shorter than declared length` |
 | dominio desconocido | `unknown diarsaba domain` |
 | request NET sin campo length-prefixed completo | `missing length-prefixed field` o `length-prefixed field exceeds payload` |
-| bytes extra en `NET_ANNOUNCE` o `NET_FIND` | error por trailing bytes |
+| bytes extra en `NET_CONNECT`, `NET_SUBSCRIBE`, `NET_ANNOUNCE` o `NET_FIND` | error por trailing bytes |
 | opcode NET no soportado | `unsupported net opcode` |
 
 ## 11. Consideraciones para implementadores de clientes
@@ -389,4 +428,4 @@ Contrato:
 - No asumir que todos los errores se reflejan en códigos HTTP o en cierres de WebSocket; deben inspeccionarse los bits del frame.
 - Soportar payloads vacíos en respuestas exitosas de algunas operaciones NET.
 - Soportar múltiples frames `EVT_PROVIDER_FOUND` para una sola búsqueda lógica.
-- No depender de `AUTH`, `NET_CONNECT` ni `NET_SUBSCRIBE` hasta que existan implementaciones reales.
+- No depender de `AUTH` para flujos reales hasta que exista implementación más allá del placeholder.
