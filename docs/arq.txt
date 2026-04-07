@@ -1,0 +1,443 @@
+membrana[celula_index, value]
+
+keyvalue{
+
+    set(key, membrana) → ok()
+
+    get(key) → ok(membrana) || undefined
+
+    del(key) → ok()
+
+}
+
+genoma{
+  0 GEN_LEER_SELF
+  0 GEN_LEER_ANY
+  0 GEN_ESCRIBIR_SELF
+  0 GEN_ESCRIBIR_ANY
+  0 GEN_BORRAR_SELF
+  0 GEN_BORRAR_ANY
+
+  0 GEN_DIFERIR
+  0 GEN_FUCIONAR
+  0 GEN_CLONAR
+
+  0 GEN_DOMINANTE
+  0 GEN_LEER_LIBRE
+
+  0 GEN_MIGRADA
+
+  0 GHOST_FLAG
+}
+
+genomaGENESIS/DIOS{
+  1 GEN_LEER_SELF
+  1 GEN_LEER_ANY
+  1 GEN_ESCRIBIR_SELF
+  1 GEN_ESCRIBIR_ANY
+  1 GEN_BORRAR_SELF
+  1 GEN_BORRAR_ANY
+  
+  1 GEN_DIFERIR
+  0 GEN_FUCIONAR
+  0 GEN_CLONAR
+
+  0 GEN_DOMINANTE
+  1 GEN_LEER_LIBRE
+
+  0 GEN_MIGRADA
+
+  0 GHOST_FLAG
+}
+
+celula[ hash: [u8; 32], salt: [u8; 16], genoma: u32,  x: u32,   y: u32,  z: u32]
+celula_index:uint:32
+
+ouroboros{
+
+    append(celula) → ok(celula_index)
+
+    read(celula_index, secrete) → ok(celula) || unauthorized
+
+    update_auth(celula_index, secrete, genoma, x, y, z) → ok() || unauthorized
+
+    update(celula_index, genoma, x, y, z) // only system
+
+}
+
+
+
+correspondencia{
+
+    función leer(key, celula_index, secrete) {
+
+        // 1. Resolver el rastro de migración con el secreto
+        activa = resolver_celula(celula_index, secrete)
+        if (!activa) {
+            return { status: unauthorized } // Ni siquiera pasó la autenticación
+        }
+
+        // 2. Intentar obtener la membrana
+        membrana = keyvalue.get(key)
+        if (!membrana) {
+            // MEDIDA DE SEGURIDAD: No mutamos la célula en operaciones vacías
+            // Devolvemos el índice actual resuelto por si venía de migraciones anteriores
+            return { status: undefined, celula_index: activa.index }
+        }
+
+        // 3. Determinar permisos (Dueño vs Tercero con autoridad)
+        es_dueño = (membrana.celula_index == celula_index) 
+        
+        if (es_dueño) {
+            bandera_requerida = GEN_LEER_SELF
+        } else {
+            bandera_requerida = GEN_LEER_ANY
+        }
+
+        // 4. Verificar permisos a nivel de bits
+        if ((activa.data.genoma & bandera_requerida) == 0) {
+            // MEDIDA DE SEGURIDAD: No mutamos si no tiene permiso
+            return { status: unauthorized, celula_index: activa.index }
+        }
+
+        // 5. ¡Operación exitosa! SÓLO AQUÍ refrescamos la célula activa
+        nuevo_indice = refrescar(activa.index)
+
+        // 6. Retornar el valor solicitado Y el nuevo índice actualizado
+        return { 
+            status: ok,
+            valor: membrana.value, 
+            nuevo_celula_index: nuevo_indice 
+        }
+    }
+
+    función leer_libre(key) {
+
+        // 1. Obtener la membrana
+        membrana = keyvalue.get(key)
+        if (!membrana) {
+            return { status: undefined }
+        }
+
+        // 2. Buscar al dueño original usando el resolutor interno del sistema
+        dueño = resolver_celula_sistema(membrana.celula_index)
+
+        // 3. Verificar si el dueño existe y tiene el gen de lectura pública encendido
+        es_lectura_libre = dueño && ((dueño.data.genoma & GEN_LEER_LIBRE) != 0)
+
+        // 4. Retornar el valor si es público, o denegar el acceso si es privado
+        if (es_lectura_libre) {
+            return { status: ok, valor: membrana.value }
+        } else {
+            return { status: unauthorized } 
+        }
+    }
+
+    función escribir(key, value, celula_index, secrete) {
+
+        // 1. Resolver el rastro de migración con el secreto
+        activa = resolver_celula(celula_index, secrete)
+        if (!activa) {
+            return { status: unauthorized } // Falla la autenticación inicial
+        }
+
+        // 2. Intentar obtener la membrana
+        membrana = keyvalue.get(key)
+
+        // 3. Si la membrana NO existe, la creamos (Upsert)
+        if (!membrana) {
+            // Al crearla, guardamos el índice inicial que usó el cliente como identificador de dueño
+            nueva_membrana = {
+                celula_index: celula_index, 
+                value: value
+            }
+            keyvalue.set(key, nueva_membrana)
+            
+            // ¡Éxito al crear! Solo aquí refrescamos
+            nuevo_indice = refrescar(activa.index)
+            return { status: ok, nuevo_celula_index: nuevo_indice }
+        }
+
+        // 4. Si la membrana SÍ existe, determinar permisos (Dueño vs Tercero)
+        es_dueño = (membrana.celula_index == celula_index)
+        
+        if (es_dueño) {
+            bandera_requerida = GEN_ESCRIBIR_SELF
+        } else {
+            bandera_requerida = GEN_ESCRIBIR_ANY
+        }
+
+        // 5. Verificar permisos a nivel de bits
+        if ((activa.data.genoma & bandera_requerida) == 0) {
+            // MEDIDA DE SEGURIDAD: Denegado. No mutamos la célula.
+            // Devolvemos el índice actual por si la célula había migrado en éxitos pasados.
+            return { status: unauthorized, celula_index: activa.index }
+        }
+
+        // 6. Aplicar la escritura a la membrana existente
+        membrana.value = value
+        keyvalue.set(key, membrana)
+
+        // 7. ¡Operación de sobreescritura exitosa! Refrescamos la célula activa
+        nuevo_indice = refrescar(activa.index)
+
+        // 8. Retornar estado y el nuevo índice actualizado
+        return { 
+            status: ok, 
+            nuevo_celula_index: nuevo_indice 
+        }
+    }
+
+    función borrar(key, celula_index, secrete) {
+
+        // 1. Resolver el rastro de migración con el secreto
+        activa = resolver_celula(celula_index, secrete)
+        if (!activa) {
+            return { status: unauthorized } // Falla la autenticación inicial
+        }
+
+        // 2. Intentar obtener la membrana
+        membrana = keyvalue.get(key)
+
+        // 3. Si la membrana NO existe, no hay nada que borrar.
+        if (!membrana) {
+            // MEDIDA DE SEGURIDAD: Operación vacía, no mutamos la célula.
+            // Devolvemos el índice actual resuelto.
+            return { status: undefined, celula_index: activa.index }
+        }
+
+        // 4. Determinar permisos (Dueño vs Tercero con autoridad)
+        es_dueño = (membrana.celula_index == celula_index)
+        
+        if (es_dueño) {
+            bandera_requerida = GEN_BORRAR_SELF
+        } else {
+            bandera_requerida = GEN_BORRAR_ANY
+        }
+
+        // 5. Verificar permisos a nivel de bits
+        if ((activa.data.genoma & bandera_requerida) == 0) {
+            // MEDIDA DE SEGURIDAD: Denegado. No mutamos la célula.
+            return { status: unauthorized, celula_index: activa.index }
+        }
+
+        // 6. Ejecutar el borrado en el sistema de almacenamiento
+        keyvalue.delete(key)
+
+        // 7. ¡Borrado exitoso! SÓLO AQUÍ refrescamos la célula activa
+        nuevo_indice = refrescar(activa.index)
+
+        // 8. Retornar estado y el nuevo índice actualizado
+        return { 
+            status: ok, 
+            nuevo_celula_index: nuevo_indice 
+        }
+    }
+
+    función diferir(celula_index, secrete, celula_nueva) {
+
+        // 1. Resolver el rastro de migración de la célula padre con el secreto
+        activa = resolver_celula(celula_index, secrete)
+        if (!activa) {
+            return { status: unauthorized } // Falla la autenticación inicial
+        }
+
+        // 2. Verificar si la célula padre tiene permiso para diferirse
+        if ((activa.data.genoma & GEN_DIVIDIR) == 0) {
+            // MEDIDA DE SEGURIDAD: Denegado. No mutamos la célula padre.
+            // Devolvemos el índice actual por si la célula había migrado antes.
+            return { status: unauthorized, celula_index: activa.index }
+        }
+
+        // 3. Verificar la herencia estricta de poder a nivel de bits
+        // La nueva célula no puede tener genes (bits en 1) que el padre no tenga.
+        if ((activa.data.genoma & celula_nueva.genoma) != celula_nueva.genoma) {
+            // MEDIDA DE SEGURIDAD: Intento de escalada de privilegios. No mutamos.
+            return { status: unauthorized, celula_index: activa.index } 
+        }
+
+        // 4. Guardar la nueva célula diferida (hija) en el sistema Ouroboros
+        indice_diferida = ouroboros.append(celula_nueva)
+
+        // 5. ¡Operación exitosa! SÓLO AQUÍ refrescamos la célula padre activa
+        nuevo_indice_padre = refrescar(activa.index)
+
+        // 6. Retornar estado, el índice de la célula creada, y el nuevo índice del padre
+        return { 
+            status: ok, 
+            indice_diferida: indice_diferida,      // El índice de la nueva célula hija
+            nuevo_celula_index: nuevo_indice_padre // El nuevo puntero de la célula padre
+        }
+    }
+
+    función cruzar(celula_index_a, secrete_a, celula_index_b, secrete_b) {
+
+        // 1. Resolver el rastro de migración de AMBAS células padres con sus secretos
+        activa_a = resolver_celula(celula_index_a, secrete_a)
+        activa_b = resolver_celula(celula_index_b, secrete_b)
+
+        if (!activa_a || !activa_b) {
+            return { status: unauthorized } // Falla la autenticación de alguna
+        }
+
+        // 2. Verificar que ambas células tengan el permiso para cruzarse/reproducirse
+        if ((activa_a.data.genoma & GEN_CRUZAR) == 0 || (activa_b.data.genoma & GEN_CRUZAR) == 0) {
+            // MEDIDA DE SEGURIDAD: Denegado. No creamos nada ni mutamos a los padres.
+            // Devolvemos sus índices actuales resueltos por si alguna había migrado previamente.
+            return { 
+                status: unauthorized, 
+                celula_index_a: activa_a.index, 
+                celula_index_b: activa_b.index 
+            }
+        }
+
+        // 3. Crear la nueva célula hija (Unión de poderes con OR a nivel de bits)
+        celula_hija = {
+            genoma: activa_a.data.genoma | activa_b.data.genoma,
+            // x, y, z se inicializarían según lo requiera tu sistema
+        }
+
+        // 4. Registrar la nueva célula hija en Ouroboros
+        indice_hijo = ouroboros.append(celula_hija)
+
+        // 5. ¡Operación exitosa! SÓLO AQUÍ refrescamos a AMBAS células padres.
+        nuevo_indice_a = refrescar(activa_a.index)
+        nuevo_indice_b = refrescar(activa_b.index)
+
+        // 6. Retornar estado, el índice del hijo, y los nuevos índices de los padres
+        return { 
+            status: ok, 
+            indice_hijo: indice_hijo,
+            nuevo_celula_index_a: nuevo_indice_a,
+            nuevo_celula_index_b: nuevo_indice_b
+        }
+    }
+
+    función refrescar(celula_index) {
+
+        // 1. Leer la célula original usando el método interno del sistema
+        celula_original = ouroboros.read(celula_index)
+        
+        if (!celula_original) {
+            return undefined 
+        }
+
+        // 2. Preparar la copia de la célula que se va a mover
+        celula_renovada = {
+            genoma: celula_original.genoma,
+            x: celula_original.x,
+            y: celula_original.y,
+            z: celula_original.z
+        }
+
+        // 3. Re-insertar la célula en Ouroboros (esto genera el nuevo índice)
+        nuevo_celula_index = ouroboros.append(celula_renovada)
+
+        // 4. Preparar el estado de la célula vieja con la bandera de migración
+        genoma_migrado = celula_original.genoma | GEN_MIGRADA
+
+        // 5. Actualizar la célula original (usando el método interno update)
+        ouroboros.update(
+            celula_index,       // Índice original
+            genoma_migrado,     // Genoma con GEN_MIGRADA en 1
+            nuevo_celula_index, // Parámetro x = Puntero a la nueva ubicación
+            celula_original.y,
+            celula_original.z
+        )
+
+        return nuevo_celula_index
+    }
+
+    función resolver_celula(celula_index, secrete) {
+        indice_actual = celula_index
+        celula = ouroboros.read_auth(indice_actual, secrete)
+
+        if (!celula) return null
+
+        // Bucle para seguir el rastro si la célula migró
+        mientras ((celula.genoma & GEN_MIGRADA) != 0) {
+            indice_actual = celula.x
+            celula = ouroboros.read_auth(indice_actual, secrete)
+            
+            // Si en algún punto de la cadena falla la autorización, abortamos
+            if (!celula) return null 
+        }
+
+        // Retornamos la información completa necesaria para las demás funciones
+        return { 
+            data: celula, 
+            index: indice_actual, 
+            original_index: celula_index 
+        }
+    }
+
+    función resolver_celula_sistema(celula_index) {
+        // Es igual que 'resolver_celula', pero usa el método 'read' interno de Ouroboros
+        // No requiere secreto, porque es el propio sistema consultando el estado de un dueño.
+        indice_actual = celula_index
+        celula = ouroboros.read(indice_actual)
+
+        if (!celula) return null
+
+        mientras ((celula.genoma & GEN_MIGRADA) != 0) {
+            indice_actual = celula.x
+            celula = ouroboros.read(indice_actual)
+            if (!celula) return null 
+        }
+
+        return { data: celula, index: indice_actual, original_index: celula_index }
+    }
+    
+}
+
+
+
+auth{
+
+    keys() → ok(public, private)
+
+    sign(public, data) → ok(certificado, pasaporte)
+
+    verify(pasaporte, certificado) → ok()
+
+}
+
+
+
+p2p{
+
+    directo(peerid, data) //enviar
+
+    anunciar(data) //anuncias dato
+
+    buscar(data) //buscas dato
+
+    suscribir(data) //suscribes a topic
+
+    publicar(data) //publicas en topic
+
+    conectar() //conectar a peer o relay
+
+    event()
+
+}
+
+
+
+websocket{
+
+    send()
+
+    event()
+
+}
+
+
+
+http{
+
+    send()
+
+    event()
+
+}
